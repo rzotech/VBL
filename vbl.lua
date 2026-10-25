@@ -64,6 +64,9 @@ local SpikeVelocityMultiplierVal = 1.35
 local LiveBallPredictorEnabled = false
 local CourtBoundaryCheckerEnabled = false
 local BallChamsEnabled = false
+local HitboxExpanderEnabled = false
+local HitboxExpanderSize = 14.0
+local HitboxOverlayEnabled = false
 
 local isServingState = false
 
@@ -839,6 +842,121 @@ local function updateLiveBallState()
 end
 
 -- ========================================================
+-- HITBOX EXPANDER & REACH OVERLAY
+-- ========================================================
+local hitboxAdornment = Instance.new("SphereHandleAdornment")
+hitboxAdornment.Name = "RzoHub_HitboxOverlay"
+hitboxAdornment.Radius = HitboxExpanderSize / 2
+hitboxAdornment.Color3 = Color3.fromRGB(0, 255, 200)
+hitboxAdornment.Transparency = 0.65
+hitboxAdornment.AlwaysOnTop = true
+hitboxAdornment.ZIndex = 5
+hitboxAdornment.Adornee = nil
+hitboxAdornment.Parent = workspace
+
+local hitboxPart = nil
+local hitboxWeld = nil
+
+local function cleanupHitboxPart()
+    if hitboxWeld and hitboxWeld.Parent then
+        hitboxWeld:Destroy()
+        hitboxWeld = nil
+    end
+    if hitboxPart and hitboxPart.Parent then
+        hitboxPart:Destroy()
+        hitboxPart = nil
+    end
+end
+
+local function syncHitboxPart()
+    local char = localPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    if not HitboxExpanderEnabled or not hrp then
+        cleanupHitboxPart()
+        return
+    end
+
+    if not hitboxPart or not hitboxPart.Parent or hitboxPart.Parent ~= char then
+        cleanupHitboxPart()
+        hitboxPart = Instance.new("Part")
+        hitboxPart.Name = "RzoHub_HitboxSphere"
+        hitboxPart.Shape = Enum.PartType.Ball
+        hitboxPart.CanCollide = false
+        hitboxPart.Massless = true
+        hitboxPart.CastShadow = false
+        hitboxPart.Transparency = 1
+        hitboxPart.Size = Vector3.new(HitboxExpanderSize, HitboxExpanderSize, HitboxExpanderSize)
+        hitboxPart.CFrame = hrp.CFrame
+        hitboxPart.Parent = char
+
+        hitboxWeld = Instance.new("WeldConstraint")
+        hitboxWeld.Part0 = hrp
+        hitboxWeld.Part1 = hitboxPart
+        hitboxWeld.Parent = hitboxPart
+    else
+        hitboxPart.Size = Vector3.new(HitboxExpanderSize, HitboxExpanderSize, HitboxExpanderSize)
+    end
+end
+
+local hitboxRenderConnection = nil
+
+local function updateHitboxFrame()
+    local char = localPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    if HitboxExpanderEnabled and hrp then
+        syncHitboxPart()
+
+        local ball = getLiveBall()
+        if ball and ball:IsA("BasePart") then
+            local dist = (hrp.Position - ball.Position).Magnitude
+            if dist <= (HitboxExpanderSize / 2) + 2.0 then
+                if firetouchinterest and hitboxPart then
+                    pcall(firetouchinterest, hitboxPart, ball, 0)
+                    task.defer(pcall, firetouchinterest, hitboxPart, ball, 1)
+                end
+            end
+        end
+    else
+        cleanupHitboxPart()
+    end
+
+    if HitboxOverlayEnabled and hrp then
+        hitboxAdornment.Adornee = hrp
+        hitboxAdornment.Radius = HitboxExpanderSize / 2
+        hitboxAdornment.Visible = true
+    else
+        hitboxAdornment.Adornee = nil
+        hitboxAdornment.Visible = false
+    end
+end
+
+local function updateHitboxState()
+    if HitboxExpanderEnabled or HitboxOverlayEnabled then
+        if not hitboxRenderConnection then
+            hitboxRenderConnection = runService.RenderStepped:Connect(updateHitboxFrame)
+        end
+        syncHitboxPart()
+    else
+        if hitboxRenderConnection then
+            hitboxRenderConnection:Disconnect()
+            hitboxRenderConnection = nil
+        end
+        cleanupHitboxPart()
+        hitboxAdornment.Adornee = nil
+        hitboxAdornment.Visible = false
+    end
+end
+
+localPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if HitboxExpanderEnabled then
+        syncHitboxPart()
+    end
+end)
+
+-- ========================================================
 -- WINDUI FRAMEWORK LOADER
 -- ========================================================
 local WindUI_Sources = {
@@ -985,161 +1103,4 @@ userInputService.InputBegan:Connect(function(input, processed)
         pcall(function()
             if rzoHubWindow.Toggle then
                 rzoHubWindow:Toggle()
-            elseif rzoHubWindow.IsOpen ~= nil then
-                if rzoHubWindow.IsOpen then
-                    rzoHubWindow:Close()
-                else
-                    rzoHubWindow:Open()
-                end
-            end
-        end)
-    end
-end)
-
--- Main Tab
-local mainTab = rzoHubWindow:Tab({ Title = "Main", Icon = "cpu", Locked = false })
-mainTab:Select()
-
-mainTab:Section({ Title = "Ball & Visual Trajectory" })
-
-mainTab:Toggle({
-    Title = "Live Ball Trajectory (Predictor)",
-    Icon = "activity",
-    Flag = "LiveBallPredictor",
-    Callback = function(val)
-        LiveBallPredictorEnabled = val
-        updateLiveBallState()
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Court In/Out Boundary Checker",
-    Icon = "map-pin",
-    Flag = "CourtBoundaryChecker",
-    Callback = function(val)
-        CourtBoundaryCheckerEnabled = val
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Ball ESP & State Chams",
-    Icon = "disc",
-    Flag = "BallChamsEnabled",
-    Callback = function(val)
-        BallChamsEnabled = val
-        updateLiveBallState()
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Spike Target Predictor (Self)",
-    Icon = "target",
-    Flag = "BallPredictorSelf",
-    Callback = function(val)
-        PlayerPredictor.SelfEnabled = val
-        updatePlayerPredictors()
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Spike Target Predictor (Enemy)",
-    Icon = "target",
-    Flag = "BallPredictorEnemy",
-    Callback = function(val)
-        PlayerPredictor.EnemyEnabled = val
-        updatePlayerPredictors()
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Enable ESP Character Direction",
-    Icon = "eye",
-    Flag = "ESPEnabled",
-    Callback = function(val)
-        if val then
-            startDirectionESP()
-        else
-            stopDirectionESP()
-        end
-    end,
-})
-
-mainTab:Section({ Title = "Spike & Serve Modifiers" })
-
-mainTab:Toggle({
-    Title = "Auto Serve Perfect Power",
-    Icon = "zap",
-    Flag = "AutoServePower",
-    Callback = function(val)
-        AutoServePowerEnabled = val
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Anti-Out Spike Safety Clamp",
-    Icon = "shield-check",
-    Flag = "AntiOutSpikeClamp",
-    Callback = function(val)
-        AntiOutSpikeClampEnabled = val
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Spike Velocity Multiplier",
-    Icon = "trending-up",
-    Flag = "SpikeMultiplierEnabled",
-    Callback = function(val)
-        SpikeVelocityMultiplierEnabled = val
-    end,
-})
-
-mainTab:Slider({
-    Title = "Spike Multiplier Factor",
-    Icon = "sliders",
-    Flag = "SpikeMultiplierFactor",
-    Min = 1.0,
-    Max = 2.5,
-    Step = 0.05,
-    Value = 1.35,
-    Callback = function(val)
-        SpikeVelocityMultiplierVal = val
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Auto Max Charge Timeskip Hinata",
-    Icon = "flame",
-    Flag = "TimeskipChargeEnabled",
-    Callback = function(val)
-        TimeskipChargeEnabled = val
-    end,
-})
-
-mainTab:Toggle({
-    Title = "Extra Sanju Tilt",
-    Icon = "crosshair",
-    Flag = "SanjuTiltEnabled",
-    Callback = function(val)
-        SanjuTiltEnabled = val
-    end,
-})
-
--- Configuration Management
-local configManager = rzoHubWindow.ConfigManager
-if configManager then
-    pcall(function()
-        rzoHubWindow.CurrentConfig = configManager:CreateConfig("default")
-        if rzoHubWindow.CurrentConfig and rzoHubWindow.CurrentConfig.Load then
-            rzoHubWindow.CurrentConfig:Load()
-        end
-    end)
-
-    rzoHubWindow:OnClose(function()
-        pcall(function()
-            rzoHubWindow.CurrentConfig = configManager:Config("default")
-            if rzoHubWindow.CurrentConfig and rzoHubWindow.CurrentConfig.Save then
-                rzoHubWindow.CurrentConfig:Save()
-            end
-        end)
-    end)
-end
+            elseif rzoHubWind
